@@ -1,0 +1,185 @@
+---
+title: "Steam Reviews Extractor"
+output: html_document
+date: "`r Sys.Date()`"
+---
+```{r}
+# Install the packages only once is enough :D
+install.packages("httr")
+install.packages("jsonlite")
+install.packages("lubridate")
+install.packages("cld3")
+```
+
+```{r}
+# Load packages before running any code :D
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(lubridate)
+library(cld3)
+```
+
+
+```{r}
+get_steam_reviews_sample <- function(app_id,
+                                     start_date = "2026-01-01",
+                                     end_date = "2026-04-01",
+                                     target_n = 90,
+                                     max_pages = 10000) {
+  
+  base_url <- paste0("https://store.steampowered.com/appreviews/", app_id)
+  
+  cursor <- "*"
+  page <- 0
+  empty_count <- 0
+  
+  all_reviews <- list()
+  
+  start_date <- as.Date(start_date)
+  end_date <- as.Date(end_date)
+  
+  repeat {
+    
+    page <- page + 1
+    
+    res <- GET(
+      base_url,
+      query = list(
+        json = 1,
+        filter = "recent", # rank reviews from most recent
+        language = "english", # filter for English reviews only
+        review_type = "all", # includes both purchase and free games
+        purchase_type = "all",
+        num_per_page = 100,
+        cursor = cursor
+      ),
+      user_agent("Mozilla/5.0")
+    )
+    
+    raw <- content(res, as = "text", encoding = "UTF-8")
+    
+    # skip broken responses
+    if (nchar(raw) == 0 || grepl("<html", raw)) {
+      cat("Skipping bad response (HTML or empty)\n")
+      next
+    }
+    
+    data <- tryCatch(
+      fromJSON(raw),
+      error = function(e) {
+        cat("JSON parse error, skipping page\n")
+        return(NULL)
+      }
+    )
+    
+    if (is.null(data)) next
+    
+    # stop if no reviews
+    if (is.null(data$reviews) || length(data$reviews) == 0) {
+      empty_count <- empty_count + 1
+      if (empty_count >= 2) break
+      next
+    } else {
+      empty_count <- 0
+    }
+    
+    reviews <- data$reviews
+    
+    # SAFE extraction (fixes nested list issue)
+    df <- data.frame(
+      review_text = reviews$review,
+      playtime_hours = round(reviews$author$playtime_at_review / 60, 1),
+      timestamp = reviews$timestamp_created,
+      stringsAsFactors = FALSE
+    )
+    
+    # date conversion
+    df$date <- as.Date(as.POSIXct(df$timestamp, origin = "1970-01-01", tz = "UTC"))
+    
+    # ALWAYS store the page first
+    all_reviews[[length(all_reviews) + 1]] <- df
+    
+    # THEN check stopping condition
+    oldest_date_in_page <- min(df$date, na.rm = TRUE)
+    
+    if (oldest_date_in_page < start_date) {
+      cat("Reached reviews older than start_date. Stopping.\n")
+      break
+    }
+    
+    cat("Page:", page, 
+        "| Reviews:", nrow(df), "\n")
+    
+    # pagination control
+    cursor <- data$cursor
+    
+    if (page >= max_pages) break
+    if (is.null(cursor) || cursor == "") break
+    
+    Sys.sleep(1)
+  }
+  
+  # combine safely
+  final_df <- bind_rows(all_reviews)
+  
+  cat("\nTOTAL RAW REVIEWS:", nrow(final_df), "\n")
+  
+  # count all reviews in date range (no word count filter)
+  n_in_timerange <- final_df %>%
+    filter(date >= start_date & date <= end_date) %>%
+    nrow()
+  
+  cat("ENGLISH REVIEWS IN DATE RANGE (NO WORD FILTER):", n_in_timerange, "\n")
+  
+  # filter for word count
+final_df <- final_df %>%
+  filter(date >= start_date & date <= end_date) %>%
+  mutate(word_count = sapply(review_text, function(x) {
+    length(strsplit(trimws(x), "\\s+")[[1]])
+  })) %>%
+  filter(word_count >= 20 & word_count <= 300) |> 
+  # Language detection to ensure reviews are English
+  mutate(detected_lang = cld3::detect_language(review_text)) %>%
+  filter(detected_lang == "en")
+
+cat("IN DATE RANGE + WORD COUNT FILTER:", nrow(final_df), "\n")
+  
+  # sampling logic
+  if (nrow(final_df) == 0) {
+    warning("No reviews in date range")
+    return(final_df)
+  }
+  
+  set.seed(123)
+  
+  if (nrow(final_df) <= target_n) {
+    return(final_df)
+  } else {
+    return(sample_n(final_df, target_n))
+  }
+}
+
+# THIS IS WHERE YOU NEED TO ENTER THE STEAM ID FOR THE GAME!!!
+reviews_sample <- get_steam_reviews_sample(
+  app_id = 646570 # ENTER/CHANGE THE STEAM ID HERE :D
+)
+```
+
+
+```{r}
+# RUN THIS CHUNK TO VIEW CLEANED REVIEWS
+reviews = reviews_sample |> 
+  select(-timestamp) |> 
+  select(-word_count) |>
+  select(-detected_lang) |> 
+  relocate(2,3,1)
+View(reviews)
+```
+
+
+
+
+
+
+
