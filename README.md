@@ -1,0 +1,1 @@
+The supplementary materials for this ICA submission includes: a content analysis codebook; a data sampling R script for scraping Steam reviews with Steam API; sample and ICR R scripts for pilot test; final sample, ICR and hypothesis testing R scripts. 
