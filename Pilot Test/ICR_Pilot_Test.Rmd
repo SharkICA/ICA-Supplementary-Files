@@ -1,0 +1,80 @@
+---
+title: "Kalpha"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r, results='hide', warning=FALSE}
+# load packages
+library(tidyverse)
+library(broom)
+library(readxl)
+library(irr)
+library(knitr)
+```
+
+```{r}
+# load dataset
+pilot_raw <- read_excel("Pilot_Test_Sample.xlsx")
+```
+
+
+```{r}
+# delete unecessary lines and replace Yes/No with 1/0
+pilot <- pilot_raw |>
+  select(-Q2, -Q3, -Q6, -Q7, -Q20) |> 
+  mutate(across(Q8:Q19, ~ ifelse(. == "Yes", 1, 0))) |> 
+  slice(-1) |> 
+  rename("Review_ID" = Q4)
+```
+
+```{r}
+# prep dataframe for ICR testing
+long_data <- pilot |>
+  pivot_longer(
+    cols = Q8:Q19,
+    names_to = "variable",
+    values_to = "value"
+  )
+```
+
+```{r}
+# rename the columns by variable names
+var_info <- data.frame(
+  Question  = paste0("Q", setdiff(8:19, 15)),   # Q8-Q19 without Q15 = 11 codes
+  Variable  = c("Environment design", "Character appearance", "Audio", "Aesthetic dimension",
+                "Plot", "Character building", "Narrative dimension",
+                "Challenge", "Control", "Core mechanism", "Gameplay dimension"),
+  Dimension = c(rep("Aesthetic", 4), rep("Narrative", 3), rep("Gameplay", 4))
+)
+results <- list()
+for (v in unique(long_data$variable)) {
+
+  temp <- long_data |>
+    filter(variable == v) |>
+    select(Review_ID, Coder, value) |>
+    pivot_wider(names_from = Coder, values_from = value)
+
+  alpha <- kripp.alpha(t(as.matrix(temp[,-1])), method = "nominal")
+
+  results[[v]] <- data.frame(
+    Question           = v,
+    N_units            = alpha$subjects,
+    N_coders           = alpha$raters,
+    Krippendorff_alpha = round(alpha$value, 3)
+  )
+}
+
+alpha_table <- bind_rows(results) |>
+  left_join(var_info, by = "Question") |>
+  mutate(Agreement = case_when(
+    Krippendorff_alpha >= 0.80  ~ "Good",
+    Krippendorff_alpha >= 0.667 ~ "Acceptable",
+    TRUE                        ~ "Tentative"
+  )) |>
+  arrange(as.numeric(sub("Q", "", Question))) |>
+  select(Dimension, Variable, Question, N_units, N_coders, Krippendorff_alpha, Agreement)
+
+kable(alpha_table, caption = "Intercoder reliability (Krippendorff's alpha) by Variable")
+```
+
