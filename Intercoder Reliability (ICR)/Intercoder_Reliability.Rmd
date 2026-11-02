@@ -1,0 +1,118 @@
+---
+title: "Final Intercoder Reliability"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r, results='hide', warning=FALSE}
+# install packages if needed
+## install.packages(c("tidyverse", "broom", "readxl", "irr", "writexl", "knitr"))
+# load packages
+library(tidyverse)
+library(broom)
+library(readxl)
+library(irr)
+library(writexl)
+library(knitr)
+```
+Read Dataset & Data Cleaning
+```{r}
+# Read raw data file into data frame
+data_raw <- read_xlsx("Final_Sample.xlsx")
+```
+
+```{r}
+# Delete unecessary lines and replace Yes/No with 1/0
+data <- data_raw |>
+  select(-(1:17)) |> 
+  mutate(across(Q7:Q17, ~ ifelse(. == "Yes", 1, 0))) |> 
+  slice(-1) |> 
+  rename("Review_ID" = Q4,
+         "Category" = Q2,
+         "Genre" = Q3,
+         "Post Date" = Q6,
+         "Played Hours" = Q5,
+         "Coder Remark" = Q20)
+```
+
+```{r}
+# Extract data for intercoder reliability testing
+intercoder_df <- data |> 
+  filter(grepl("_(10|[1-9])$", `Review_ID`)) |> 
+  select(-2,-3,-5,-6,-18)
+```
+
+```{r, results='hide'}
+# Turn the data format into long
+long_data <- intercoder_df |>
+  pivot_longer(
+    cols = Q7:Q17,
+    names_to = "variable",
+    values_to = "value"
+  )
+
+sum(is.na(long_data))
+```
+
+ICR with Cronbach's Alpha
+```{r}
+# Rename columns by variable names
+var_names <- c(
+  Q7  = "Environment design",
+  Q8  = "Character appearance",
+  Q9  = "Audio",
+  Q10 = "Aesthetic dimension",
+  Q11 = "Plot",
+  Q12 = "Character buildi",
+  Q13 = "Narrative dimension",
+  Q14 = "Challenge",
+  Q15 = "Control",
+  Q16 = "Mechanism",
+  Q17 = "Gameplay dimension"
+)
+```
+
+```{r, results='hide'}
+# ICR Results
+results <- list()
+
+for (v in unique(long_data$variable)) {
+
+  temp <- long_data |>
+    filter(variable == v) |>
+    select(Review_ID, Coder, value) |>
+    pivot_wider(names_from = Coder, values_from = value)
+
+  alpha <- kripp.alpha(t(as.matrix(temp[,-1])), method = "nominal")
+
+  results[[ var_names[[v]] ]] <- alpha$value
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# Summary of ICR Results Table
+alpha_table <- data.frame(
+  Question           = names(var_names)[match(names(results), var_names)],
+  Variable           = names(results),
+  Dimension          = c("Aesthetic", "Aesthetic", "Aesthetic", "Aesthetic",
+                         "Narrative", "Narrative", "Narrative",
+                         "Gameplay", "Gameplay", "Gameplay", "Gameplay")[
+                           match(names(results), var_names)],
+  Krippendorff_alpha = round(unlist(results), 3),
+  row.names          = NULL
+)
+
+# Interpretation label (Krippendorff's suggested cut-offs)
+alpha_table$Agreement <- cut(alpha_table$Krippendorff_alpha,
+                             breaks = c(-Inf, 0.667, 0.8, Inf),
+                             labels = c("Tentative", "Acceptable", "Good"), 
+                             right = FALSE)
+
+# Sort by Q number so the order matches
+alpha_table <- alpha_table[order(as.numeric(sub("Q", "", alpha_table$Question))), ]
+
+kable(alpha_table, row.names = FALSE,
+             caption = "Krippendorff's alpha by variable")
+```
+
